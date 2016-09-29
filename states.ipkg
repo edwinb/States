@@ -1,0 +1,12 @@
+package states
+
+version = 0.1
+
+sourcedir = src
+modules = States
+        , State.Var
+
+--         , Interface.IO
+--         , Interface.Exception
+
+        , Utils.PList
