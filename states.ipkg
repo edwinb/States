@@ -6,7 +6,7 @@ sourcedir = src
 modules = States
         , State.Var
 
---         , Interface.IO
---         , Interface.Exception
+        , Interface.IO
+        , Interface.Exception
 
         , Utils.PList

@@ -165,6 +165,11 @@ SMTrans m ty ops xs
     in_res (Stable lbl sig inr :: xs) = MkRes lbl sig inr :: in_res xs
     in_res (Trans lbl sig inr outr :: xs) = MkRes lbl sig inr :: in_res xs
 
+public export
+SMOp : (m : Type -> Type) -> Type -> Type
+SMOp m ty = {ts : _ } -> {ops : _} -> {ctxt : Context ts} -> 
+            SMs m ty ops ctxt (const ctxt)
+
 -- Some useful hints for proof construction in polymorphic programs
 %hint
 public export total
