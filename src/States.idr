@@ -36,15 +36,16 @@ data State : SM state -> Type where
 -- This needs to be a specialised type, rather than a generic List,
 -- because resources might contain List as a type, and we'd end up with
 -- a universe cycle.
-public export
-data Context : PList SM -> Type where
-     Nil : Context []
-     (::) : Resource t -> Context ts -> Context (t :: ts)
+namespace Context
+  public export
+  data Context : PList SM -> Type where
+       Nil : Context []
+       (::) : Resource t -> Context ts -> Context (t :: ts)
 
-public export
-(++) : Context ts -> Context us -> Context (ts ++ us)
-(++) [] ys = ys
-(++) (x :: xs) ys = x :: xs ++ ys
+  public export
+  (++) : Context ts -> Context us -> Context (ts ++ us)
+  (++) [] ys = ys
+  (++) (x :: xs) ys = x :: xs ++ ys
 
 public export
 appendNilRightNeutral : (l : Context ts) -> l ++ [] = l

@@ -2,51 +2,73 @@ import States
 
 import System.Concurrency.Channels
 import Interface.IO
+import State.Var
 
-data ServerState
-        = None -- Initial state
+data ConcState
+        = None -- Initial/Final state
         | Waiting (request -> Type) -- Final state (so can't listen and not reply)
         | Processing (request -> Type) Type 
+        | Finished
 
-data ServerFinal : ServerState -> Type where
-     WaitingIsFinal : ServerFinal (Waiting iface)
-     NoneIsFinal : ServerFinal None
+data ConcFinal : ConcState -> Type where
+     WaitingIsFinal : ConcFinal (Waiting iface)
+     NoneIsFinal : ConcFinal None
+     FinishedIsFinal : ConcFinal Finished
 
 data Process : (request -> Type) -> Type where
      MkProcess : PID -> Process iface
 
-data ServerOp : SM_sig ServerState where
+data ForkThread : (request -> Type) -> Type where
+     Main : (Process iface) -> ForkThread iface
+     Child : ForkThread iface
+
+data ConcOp : SM_sig ConcState where
      Fork : (iface : request -> Type) ->
-            ServerOp (Maybe (Process iface)) None 
-                     (\res => case res of
-                                   Nothing => Waiting iface
-                                   Just pid => None)
+            ConcOp (ForkThread iface) None 
+                   (\server => case server of
+                                    Main iface => None
+                                    Child => Waiting iface)
      Listen : {iface : request -> Type} ->
               (timeout: Int) ->
-              ServerOp (Maybe request)
+              ConcOp (Maybe request)
                        (Waiting iface)
                             (\res => case res of
                                           Nothing => Waiting iface
                                           Just msg => Processing iface (iface msg))
      Reply : {iface : request -> Type} ->
              (reply : responsetype) ->
-             ServerOp () (Processing iface responseType) 
+             ConcOp () (Processing iface responseType) 
                          (const (Waiting iface))
+     QuitThread : ConcOp any (Waiting iface) (const Finished)
 
-Server : SM ServerState
-Server = MkSM None ServerFinal ServerOp
+Conc : SM ConcState
+Conc = MkSM None ConcFinal ConcOp
 
-Execute Server IO where
+fork : ((s : State Conc) -> 
+             SMTransNew m () ops [Stable s Conc (Waiting iface)]) -> 
+       SMNew m (Process iface) (Conc :: ops)
+fork {iface} server
+     = do s <- new Conc
+          Main pid <- on s (Fork iface)
+               | Child => do call (server s)
+                             ret <- on s QuitThread
+                             delete s
+                             pure ret
+          delete s
+          pure pid
+
+Execute Conc IO where
     resource None = ()
     resource (Waiting f) = ()
     resource (Processing f x) = Channel
+    resource Finished = ()
 
     initialise = ()
 
     exec res (Fork iface) k 
-        = do pid <- spawn (do k Nothing res
+        = do pid <- spawn (do k Child res
                               pure ())
-             k (Just (MkProcess pid)) ()
+             k (Main (MkProcess pid)) ()
     exec res (Listen {request} timeout) k 
         = do Just chan <- listen timeout
                   | Nothing => k Nothing res
@@ -56,7 +78,7 @@ Execute Server IO where
     exec res (Reply reply) k 
         = do unsafeSend res reply
              k () ()
-
+    exec res QuitThread k = stopThread
 
 data ClientState 
         = Disconnected -- Initial and final state
@@ -83,6 +105,17 @@ data ClientOp : SM_sig ClientState where
 
 Client : SM ClientState
 Client = MkSM Disconnected ClientFinal ClientOp
+
+request : {iface : request -> Type} ->
+          (chan : State Client) -> (process : Process iface) ->
+          (req : request) -> 
+          SMTrans m (Maybe (iface req)) [Stable chan Client Disconnected]
+request chan proc req = do True <- on chan (Connect proc)
+                             | False => pure Nothing
+                           on chan (Send req)
+                           answer <- on chan Receive
+                           pure (Just answer)
+
 
 Execute Client IO where
     resource Disconnected = ()
@@ -111,8 +144,8 @@ ArithResponse (Negate k) = Int
 
 covering
 arithServer : ConsoleIO m => 
-              (s : State Server) ->
-              SMTrans m () [Stable s Server (Waiting ArithResponse)]
+              (s : State Conc) ->
+              SMTrans m () [Stable s Conc (Waiting ArithResponse)]
 arithServer s = do putStrLn "Waiting for message"
                    msg <- on s (Listen 2)
                    case msg of
@@ -124,32 +157,24 @@ arithServer s = do putStrLn "Waiting for message"
 
 covering
 arithClient : ConsoleIO m =>
-              SMNew m () [Client, Server]
-arithClient = with States do 
-                 server <- new Server
-                 Just proc <- on server (Fork ArithResponse)
-                      | Nothing => do call (arithServer server)
-                                      delete server
-                 delete server -- Not needed any more
+              SMNew m () [Client, Conc]
+arithClient = do 
+                 proc <- call (fork arithServer)
                  chan <- new Client
                  putStr "Number: "
                  num <- getStr
-                 True <- on chan (Connect proc)
-                            | False => do putStrLn "Server died"
-                                          delete chan
-                 on chan (Send (Add (cast num) 94))
-                 answer <- on chan Receive
+
+                 Just answer <- call $ request chan proc (Add (cast num) 94)
+                       | Nothing => do putStrLn "Server died"
+                                       delete chan
                  putStrLn (num ++ " + 94 = " ++ show answer)
-                 
-                 True <- on chan (Connect proc)
-                            | False => do putStrLn "Server died"
-                                          delete chan
-                 on chan (Send (Negate (cast num)))
-                 answer <- on chan Receive
+
+                 Just answer <- call $ request chan proc (Negate (cast num))
+                       | Nothing => do putStrLn "Server died"
+                                       delete chan
                  putStrLn ("-" ++ num ++ " = " ++ show answer)
 
                  delete chan
 
 main : IO ()
 main = run arithClient
-
