@@ -16,7 +16,7 @@ Var = MkSM () -- Initial state
            VarOp -- Operations on the state machine
 
 export
-Execute Type Var m where
+Execute Var m where
     resource x = x
     initialise = () -- No value stored on initialisation
 

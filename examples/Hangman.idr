@@ -2,6 +2,7 @@ import Data.Vect
 
 import States
 import State.Var
+import Interface.IO
 
 {- We'll need this later... -}
 total
@@ -38,14 +39,14 @@ Hangman = MkSM Unstarted -- Initial state
                HangmanOp -- Operations on the state machine
 
 {- Top level game, creates a new game then plays it -}
-hangman : SMTrans IO () [Hangman] []
+hangman : ConsoleIO io => SMNew io () [Hangman]
 hangman = do game <- new Hangman
              on game $ NewGame "testing"
              result <- on game Play
              case result of
-                  False => do lift (putStrLn "You lose")
+                  False => do putStrLn "You lose"
                               delete game
-                  True => do lift (putStrLn "You win")
+                  True => do putStrLn "You win"
                              delete game
 
 
@@ -90,25 +91,24 @@ Game = MkSM NotRunning Finished GameOp
 
 {- Implementation of the game rules, starts with a number of guesses and
    letters to guess, can only end either in victory or defeat (NotRunning) -}
-play : (game : State Game) ->
-       SMTrans IO Bool [] [Trans game Game (Score (S g) l)
-                                           (const NotRunning)]
+play : ConsoleIO io =>
+       (game : State Game) ->
+       SMTrans io Bool [Trans game Game (Score (S g) l) (const NotRunning)]
 play {g} {l = Z} game = do on game ClaimWin
                            pure True
 play {g} {l = S l} game 
       = do st <- on game GetState
-           lift (putStrLn st)
+           putStrLn st
            letter <- on game ReadGuess
            ok <- on game (Guess letter)
            case ok of
-                False => do lift (putStrLn "Incorrect")
+                False => do putStrLn "Incorrect"
                             case g of
                                  Z => do on game AdmitLoss
                                          pure False
                                  S k => play game
-                True => do lift (putStrLn "Correct!")
+                True => do putStrLn "Correct!"
                            play game
-
 
 {- Now to define how the 'Hangman' and 'Game' state machines actually run -}
 
@@ -128,7 +128,7 @@ Show (GameData g) where
             hideMissing c = if c `elem` missing then '-' else c 
 
 {- Execute 'Game' in IO using 'GameData' -}
-Execute GameState Game IO where
+Execute Game IO where
     resource = GameData
     initialise = MkNotRunning False
 
@@ -151,7 +151,7 @@ Execute GameState Game IO where
 {- Implement 'Hangman' by translating it to a lower level state machine
    'Var', for storing the word. We can create a 'Game' state machine in 
    the process. -}
-Transform HangmanState Type Hangman Var [Game] IO where
+ConsoleIO m => Transform Hangman Var [Game] m where
     toState Unstarted = () -- No word stored
     toState Playing = String  -- Word stored
     toState Won = String
@@ -163,7 +163,7 @@ Transform HangmanState Type Hangman Var [Game] IO where
 
     {- Implement 'Hangman' ops using 'Var' to store the word. 
        We're also allowed to create 'Game' state machines as required, as it
-       says in the instance header. -}
+       says in the implementation header. -}
     transform word (NewGame x) = on word (Put x)
     transform word Play = do x <- on word Get
                              game <- new Game

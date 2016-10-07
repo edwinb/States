@@ -14,7 +14,7 @@ record SM stateType where
   operations : SM_sig stateType
 
 public export
-interface Execute (state : Type) (sm : SM state) (m : Type -> Type) where
+interface Execute (sm : SM state) (m : Type -> Type) where
      resource : state -> Type
      initialise : resource (init sm)
 
@@ -142,11 +142,11 @@ data Action : Type -> Type where
      Trans : label -> SM state -> state -> (ty -> state) -> Action ty
 
 public export
-SMTrans : (m : Type -> Type) ->
-          (ty : Type) -> 
-          (ops : PList SM) ->
-          List (Action ty) -> Type
-SMTrans m ty ops xs 
+SMTransNew : (m : Type -> Type) ->
+             (ty : Type) -> 
+             (ops : PList SM) ->
+             List (Action ty) -> Type
+SMTransNew m ty ops xs 
      = SMs m ty ops (in_res xs) (\x : ty => out_res x xs)
   where
     ctxt : List (Action ty) -> PList SM
@@ -164,6 +164,15 @@ SMTrans m ty ops xs
     in_res [] = []
     in_res (Stable lbl sig inr :: xs) = MkRes lbl sig inr :: in_res xs
     in_res (Trans lbl sig inr outr :: xs) = MkRes lbl sig inr :: in_res xs
+
+public export
+SMTrans : (m : Type -> Type) -> (ty : Type) -> List (Action ty) -> Type
+SMTrans m ty xs 
+     = SMTransNew m ty [] xs
+
+public export
+SMNew : (m : Type -> Type) -> (ty : Type) -> (ops : PList SM) -> Type
+SMNew m ty ops = SMTransNew m ty ops []
 
 public export
 SMOp : (m : Type -> Type) -> Type -> Type
@@ -252,8 +261,7 @@ export
 
 
 public export
-interface Transform state state'
-                    (sm : SM state) (sm' : SM state')
+interface Transform (sm : SM state) (sm' : SM state')
                     (ops : PList SM)
                     (m : Type -> Type) | sm, m where
     -- Explain how our state corresponds to the inner machine's state
@@ -272,14 +280,14 @@ namespace Env
   public export
   data Env : (m : Type -> Type) -> Context ts -> Type where
        Nil : Env m []
-       (::) : (exec : Execute state sm m) => 
+       (::) : (exec : Execute sm m) => 
               resource @{exec} a -> Env m xs -> Env m (MkRes lbl sm a :: xs)
 
 namespace Execs
   public export
   data Execs : (m : Type -> Type) -> PList SM -> Type where
        Nil : Execs m []
-       (::) : Execute state res m -> Execs m xs -> Execs m (res :: xs)
+       (::) : Execute res m -> Execs m xs -> Execs m (res :: xs)
 
 dropVal : (prf : HasIFace st sm lbl ctxt) ->
           Env m ctxt -> Env m (drop ctxt prf)
@@ -299,7 +307,7 @@ dropEnv (x :: xs) (InCtxt idx rest)
           e :: dropEnv (x :: xs) rest
 
 getExecute : (execs : Execs m rs) -> (pos : PElem sm rs) -> 
-             Execute _ sm m
+             Execute sm m
 getExecute (h :: hs) Here = h
 getExecute (h :: hs) (There p) = getExecute hs p
 
@@ -317,11 +325,11 @@ dropExecs (x :: xs) (InList idx rest)
           e :: dropExecs (x :: xs) rest
 
 getEnvExecute : {xs, ys : Context ts} ->
-                ElemCtxt (MkRes lbl sm val) xs -> Env m ys -> Execute _ sm m
+                ElemCtxt (MkRes lbl sm val) xs -> Env m ys -> Execute sm m
 getEnvExecute HereCtxt (h :: hs) = %implementation
 getEnvExecute (ThereCtxt p) (h :: hs) = getEnvExecute p hs
 
-replaceEnvAt : (exec : Execute _ sm m) =>
+replaceEnvAt : (exec : Execute sm m) =>
                {xs, ys : Context ts} ->
                (idx : ElemCtxt (MkRes lbl sm val) xs) -> 
                (env : Env m ys) ->
@@ -381,42 +389,36 @@ ExecList m [] where
   mkExecs = []
 
 export
-(Execute _ res m, ExecList m xs) => ExecList m (res :: xs) where
+(Execute res m, ExecList m xs) => ExecList m (res :: xs) where
   mkExecs = %implementation :: mkExecs
 
 headEnvType : {sm : SM state} ->
-              Env m [MkRes v sm x] -> Execute state sm m
+              Env m [MkRes v sm x] -> Execute sm m
 headEnvType {sm} {m} {x} (h :: hs) = %implementation 
 
 headEnv : (env : Env m [MkRes v sm x]) -> resource @{headEnvType env} x
 headEnv (x :: xs) = x
-
-transHelp : {out_fn : a -> state} ->
-            (trans : Transform state state' sm sm' ops m) =>
-            {env : Env m [MkRes MkState sm' (toState @{trans} (out_fn x))]} ->
-            (x : a) -> 
-            (res : resource @{headEnvType env} (toState @{trans} (out_fn x))) ->
-            ((x : a) -> resource @{headEnvType env} (toState @{trans} (out_fn x)) -> m b) -> 
-            m b
-transHelp x res k = k x res
 
 -- Yuck. Especially the 'believe_me'. Given that at this stage there is only
 -- one possibility for the inner 'Execute', because it's a generic thing we
 -- have to pass in and there's no way of changing it in 'runSMs', this
 -- is currently fine. But: how to convince Idris? And will it always be fine?
 -- What if we change 'runSMs'?
-export
-(trans : Transform state state' sm sm' ops m, 
- ExecList m ops,
- lower : Execute state' sm' m) => Execute state sm m where
-   resource @{trans} @{_} @{lower} x = resource @{lower} (toState @{trans} x)
-   initialise @{trans} @{_} @{lower}
-         = rewrite sym (initOK @{trans}) in 
-                   initialise @{lower}
+using (sm : SM state, sm' : SM state')
+  export
+  %overlapping -- It's not really, because of the superinterface, 
+               -- but the check isn't good enough for this yet
+  (trans : Transform sm sm' ops m, 
+   ExecList m ops,
+   lower : Execute sm' m) => Execute sm m where
+     resource @{trans} @{_} @{lower} x = resource @{lower} (toState @{trans} x)
+     initialise @{trans} @{_} @{lower}
+           = rewrite sym (initOK @{trans}) in 
+                     initialise @{lower}
 
-   exec @{trans} @{_} @{lower} {out_fn} res op k = 
-     runSMs [res] mkExecs (transform {sm} {m} {tout_fn=out_fn} MkState op) 
-     (\result, env => let env' = headEnv env in k result (believe_me env'))
+     exec @{trans} @{_} @{lower} {out_fn} res op k = 
+       runSMs [res] mkExecs (transform {sm} {m} {tout_fn=out_fn} MkState op) 
+       (\result, env => let env' = headEnv env in k result (believe_me env'))
 
 export total
 run : Monad m => 
