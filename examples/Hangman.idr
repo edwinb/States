@@ -151,15 +151,16 @@ Execute Game IO where
 {- Implement 'Hangman' by translating it to a lower level state machine
    'Var', for storing the word. We can create a 'Game' state machine in 
    the process. -}
-ConsoleIO m => Transform Hangman Var [Game] m where
+ConsoleIO m => Transform Hangman [Var] [Game] m where
     toState Unstarted = () -- No word stored
     toState Playing = String  -- Word stored
     toState Won = String
     toState Lost = String
 
     initOK = Refl -- Initial states 'Unstarted' and '()' correspond
-    finalOK Won GameWon = () -- All final states are OK
-    finalOK Lost GameLost = () -- (We don't really need this pattern match :))
+    finalOK Won GameWon = ()
+    finalOK Lost GameLost = ()
+
 
     {- Implement 'Hangman' ops using 'Var' to store the word. 
        We're also allowed to create 'Game' state machines as required, as it

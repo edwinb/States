@@ -12,7 +12,7 @@ data VarOp : SM_sig Type where
 public export
 Var : SM Type
 Var = MkSM () -- Initial state
-           (const ()) -- All states are valid final states
+           (\x => ()) -- All states are valid final states
            VarOp -- Operations on the state machine
 
 export

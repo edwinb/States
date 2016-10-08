@@ -38,7 +38,7 @@ public export
 
 public export
 data State : SM state -> Type where
-     MkState : State r
+     MkState : State sm
 
 
 -- This needs to be a specialised type, rather than a generic List,
@@ -278,22 +278,54 @@ export
         SMs m b ops st1 st3_fn
 (>>=) = Bind
 
+public export
+stateTypes : PList SM -> Type
+stateTypes [] = ()
+stateTypes ((::) {state} x []) = state
+stateTypes ((::) {state} x (y :: xs)) = (state, stateTypes (y :: xs))
 
 public export
-interface Transform (sm : SM state) (sm' : SM state')
+initStates : (sms : PList SM) -> stateTypes sms
+initStates [] = ()
+initStates (x :: []) = init x 
+initStates (x :: (y :: xs)) = (init x, initStates (y :: xs))
+
+public export
+Labels : PList SM -> Type
+Labels [] = ()
+Labels (x :: []) = State x
+Labels (x :: (y :: xs)) = (State x, Labels (y :: xs))
+
+public export
+mkRes : Labels sms -> stateTypes sms -> Context sms
+mkRes {sms = []} () () = []
+mkRes {sms = (sm :: [])} l t = MkRes l sm t :: []
+mkRes {sms = (sm :: sm' :: sms)} (l, ls) (t, ts) 
+      = MkRes l sm t :: mkRes ls ts
+
+public export
+AllFinal : (sms : _) -> stateTypes sms -> Type
+AllFinal [] x = ()
+AllFinal (sm :: []) st = final sm st
+AllFinal (sm :: z :: zs) (st, sts) = (final sm st, AllFinal _ sts)
+
+public export
+interface Transform (sm : SM state) (sms' : PList SM)
                     (ops : PList SM)
                     (m : Type -> Type) | sm, m where
     -- Explain how our state corresponds to the inner machine's state
-    toState : state -> state'
+    toState : state -> stateTypes sms'
+
     -- Make sure the initial and final states correspond. 
-    initOK : init sm' = toState (init sm) -- 'Refl' should usually work
-    finalOK : (x : state) -> final sm x -> final sm' (toState x)
+    initOK : initStates sms' = toState (init sm) -- 'Refl' should usually work
+
+    finalOK : (x : state) -> (prf : final sm x) -> AllFinal sms' (toState x)
 
     -- Implement our operations in terms of the inner operations
-    transform : (lbl : State sm') ->
+    transform : (lbls : Labels sms') -> -- State sm') ->
                 (op : operations sm t in_state tout_fn) ->
-                SMs m t ops [MkRes lbl sm' (toState in_state)]
-                   (\result => [MkRes lbl sm' (toState (tout_fn result))])
+                SMs m t ops (mkRes lbls (toState in_state))
+                   (\result => (mkRes lbls (toState (tout_fn result))))
 
 namespace Env
   public export
@@ -399,8 +431,21 @@ runSMs env execs (Call {op_prf} prog {ctxt_prf}) k
            runSMs env' execs' prog 
                (\prog', envk => k prog' (rebuildEnv envk ctxt_prf env))
 
+
+export total
+run : Applicative m => 
+      {auto execs : Execs m ops} -> SMs m a ops [] (const []) -> 
+      m a
+run {execs} prog = runSMs [] execs prog (\res, env' => pure res)
+
+export total
+runPure : {auto execs : Execs Basics.id ops} -> 
+          SMs Basics.id a ops [] (const []) -> a
+runPure {execs} prog = runSMs [] execs prog (\res, env' => res)
+
 public export
 interface ExecList (m : Type -> Type) (ops : PList SM) where
+  constructor MkExecList
   mkExecs : Execs m ops
 
 export
@@ -411,36 +456,87 @@ export
 (Execute res m, ExecList m xs) => ExecList m (res :: xs) where
   mkExecs = %implementation :: mkExecs
 
-headEnvType : {sm : SM state} ->
-              Env m [MkRes v sm x] -> Execute sm m
-headEnvType {sm} {m} {x} (h :: hs) = %implementation 
+firstExec : ExecList m (res :: xs) -> Execute res m
+firstExec x with (mkExecs @{x})
+  firstExec x | (y :: ys) = y
 
-headEnv : (env : Env m [MkRes v sm x]) -> resource @{headEnvType env} x
-headEnv (x :: xs) = x
+mkExecList : Execs m ops -> ExecList m ops
+mkExecList {ops = []} x = %implementation
+mkExecList {ops = (y :: ys)} (x :: xs) = let rec = mkExecList xs in
+                                             %implementation
 
--- Yuck. Especially the 'believe_me'. Given that at this stage there is only
--- one possibility for the inner 'Execute', because it's a generic thing we
--- have to pass in and there's no way of changing it in 'runSMs', this
--- is currently fine. But: how to convince Idris? And will it always be fine?
--- What if we change 'runSMs'?
-using (sm : SM state, sm' : SM state')
+tailExec : ExecList m (res :: xs) -> ExecList m xs
+tailExec es with (mkExecs @{es})
+  tailExec es | (y :: ys) = mkExecList ys
+
+{- Yuck. What follows is largely write only code, but at least it type checks.
+
+There is, however, a 'believe_me' in envRes. Given that at this stage there is
+only one possibility for the inner 'Execute', because it's a generic thing we
+have to pass in and there's no way of changing it in 'runSMs', this is
+currently fine. But: how to convince Idris? And will it always be fine?  What
+if we change 'runSMs'?  
+-}
+
+resources : (sms : _) -> ExecList m sms -> stateTypes sms -> Type
+resources [] es st = ()
+resources (x :: []) es st = resource @{firstExec es} st
+resources (x :: (y :: ys)) es (st, sts)
+     = (resource @{firstExec es} st, resources (y :: ys) @{tailExec es} sts)
+
+initAll : (sms : _) -> 
+          (es : ExecList m sms) -> resources sms es (initStates sms)
+initAll [] es = ()
+initAll (x :: []) es = initialise {sm=x} @{firstExec es} 
+initAll (x :: (y :: ys)) es 
+    = (initialise {sm=x} @{firstExec es}, initAll (y :: ys) (tailExec es))
+
+resCtxt : (sms : _) -> (sts : stateTypes sms) -> Context sms
+resCtxt [] sts = []
+resCtxt (sm :: []) st = [MkRes (MkState {sm}) sm st]
+resCtxt (sm :: (y :: ys)) (st, sts) 
+    = MkRes (MkState {sm}) sm st :: resCtxt _ sts
+
+resEnv : {lower : ExecList m sms} ->
+         (lbls : _) ->
+         (res : resources sms lower sts) -> Env m (mkRes lbls sts)
+resEnv {sms = []} {sts = ()} () res = []
+resEnv {lower} {sms = (x :: [])} {sts} lbls res 
+       = (::) @{firstExec lower} res []
+resEnv {lower = lower} {sts = (st, sts)} {sms = (x :: y :: ys)} 
+       (lbl, lbls) (res, rest) 
+       = (::) @{firstExec lower} res (resEnv lbls rest)
+
+mkLabels : (sms : _) -> Labels sms
+mkLabels [] = ()
+mkLabels (x :: []) = MkState
+mkLabels (x :: y :: ys) = (MkState, mkLabels (y :: ys))
+
+envRes : {ctxt : Context sms} ->
+         Env m ctxt -> resources sms lower sts
+envRes [] = ()
+envRes (y :: []) = believe_me y
+envRes {m} ((::) {m} y ((::) {sm} {m} {a} {lbl} z zs)) {sts = (st, sts)} 
+     = (believe_me y, envRes {m} ((::) {sm} {m} {a} {lbl} z zs))
+
+using (sm : SM state, sms' : PList SM)
   export
   %overlapping -- It's not really, because of the superinterface, 
                -- but the check isn't good enough for this yet
-  (trans : Transform sm sm' ops m, 
+  (trans : Transform sm sms' ops m, 
    ExecList m ops,
-   lower : Execute sm' m) => Execute sm m where
-     resource @{trans} @{_} @{lower} x = resource @{lower} (toState @{trans} x)
-     initialise @{trans} @{_} @{lower}
+   lower : ExecList m sms') => Execute sm m where
+     resource @{trans} @{_} @{lower} {sms'} x 
+         = resources sms' lower (toState @{trans} x)
+     initialise @{trans} @{_} @{lower} {sms'}
            = rewrite sym (initOK @{trans}) in 
-                     initialise @{lower}
+                initAll sms' lower -- (initStates sms')
 
-     exec @{trans} @{_} @{lower} {out_fn} res op k = 
-       runSMs [res] mkExecs (transform {sm} {m} {tout_fn=out_fn} MkState op) 
-       (\result, env => let env' = headEnv env in k result (believe_me env'))
+     exec @{trans} @{_} @{lower} {out_fn} {sms'} res op k = 
+             let env = resEnv (mkLabels sms') res in
+                 runSMs env mkExecs 
+                    (transform {sm} {m} {tout_fn=out_fn} (mkLabels sms') op)
+                    (\result, envk => k result (envRes envk))
+--        runSMs [res] mkExecs (transform {sm} {m} {tout_fn=out_fn} MkState op) 
+--        (\result, env => let env' = headEnv env in k result (believe_me env'))
 
-export total
-run : Monad m => 
-      {auto execs : Execs m ops} -> SMs m a ops [] (const []) -> 
-      m a
-run {execs} prog = runSMs [] execs prog (\res, env' => pure res)
