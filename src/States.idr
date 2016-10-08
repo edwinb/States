@@ -7,6 +7,7 @@ SM_sig : Type -> Type
 SM_sig state = (t : Type) -> state -> (t -> state) -> Type
 
 public export 
+%error_reverse
 record SM stateType where
   constructor MkSM
   init       : stateType
@@ -27,6 +28,13 @@ interface Execute (sm : SM state) (m : Type -> Type) where
 public export
 data Resource : SM state -> Type where
      MkRes : label -> (sm : SM state) -> state -> Resource sm
+
+infix 5 :::
+
+%error_reverse
+public export
+(:::) : label -> (p : (SM state, state)) -> Resource (fst p)
+(:::) lbl (sm, st) = MkRes lbl sm st
 
 public export
 data State : SM state -> Type where
@@ -113,9 +121,9 @@ data SMs : (m : Type -> Type) ->
            PList SM ->
            Context ts -> (ty -> Context us) ->
            Type where
-     Pure : (x : val) -> SMs m val ops (out_fn x) out_fn
+     Pure : (result : val) -> SMs m val ops (out_fn result) out_fn
      Bind : SMs m a ops st1 st2_fn ->
-            ((x : a) -> SMs m b ops (st2_fn x) st3_fn) ->
+            ((result : a) -> SMs m b ops (st2_fn result) st3_fn) ->
             SMs m b ops st1 st3_fn
      Lift : Monad m => m t -> SMs m t ops ctxt (const ctxt)
 
@@ -139,8 +147,10 @@ data SMs : (m : Type -> Type) ->
 
 public export
 data Action : Type -> Type where
-     Stable : label -> SM state -> state -> Action ty
-     Trans : label -> SM state -> state -> (ty -> state) -> Action ty
+     Stable : label -> (SM state, state) -> Action ty
+     Trans : label -> (SM state, state) -> (ty -> state) -> Action ty
+     Add : label -> (SM state, state) -> Action ty
+     Remove : label -> (SM state, state) -> Action ty
 
 public export
 SMTransNew : (m : Type -> Type) ->
@@ -148,23 +158,31 @@ SMTransNew : (m : Type -> Type) ->
              (ops : PList SM) ->
              List (Action ty) -> Type
 SMTransNew m ty ops xs 
-     = SMs m ty ops (in_res xs) (\x : ty => out_res x xs)
+     = SMs m ty ops (in_res xs) (\result : ty => out_res result xs)
   where
-    ctxt : List (Action ty) -> PList SM
-    ctxt [] = []
-    ctxt (Stable lbl sig inr :: xs) = sig :: ctxt xs
-    ctxt (Trans lbl sig inr outr :: xs) = sig :: ctxt xs
+    ctxt : (input : Bool) -> List (Action ty) -> PList SM
+    ctxt inp [] = []
+    ctxt inp (Stable lbl (sig, inr) :: xs) = sig :: ctxt inp xs
+    ctxt inp (Trans lbl (sig, inr) outr :: xs) = sig :: ctxt inp xs
+    ctxt inp (Add lbl (sig, inr) :: xs) = if inp then ctxt inp xs
+                                                 else sig :: ctxt inp xs
+    ctxt inp (Remove lbl (sig, inr) :: xs) = if inp then sig :: ctxt inp xs
+                                                    else ctxt inp xs
 
-    out_res : ty -> (as : List (Action ty)) -> Context (ctxt as)
+    out_res : ty -> (as : List (Action ty)) -> Context (ctxt False as)
     out_res x [] = []
-    out_res x (Stable lbl sig inr :: xs) = MkRes lbl sig inr :: out_res x xs
-    out_res x (Trans lbl sig inr outr :: xs) 
+    out_res x (Stable lbl (sig, inr) :: xs) = MkRes lbl sig inr :: out_res x xs
+    out_res x (Trans lbl (sig, inr) outr :: xs) 
                                     = MkRes lbl sig (outr x) :: out_res x xs
+    out_res x (Add lbl (sig, inr) :: xs) = MkRes lbl sig inr :: out_res x xs
+    out_res x (Remove lbl (sig, inr) :: xs) = out_res x xs
 
-    in_res : (as : List (Action ty)) -> Context (ctxt as)
+    in_res : (as : List (Action ty)) -> Context (ctxt True as)
     in_res [] = []
-    in_res (Stable lbl sig inr :: xs) = MkRes lbl sig inr :: in_res xs
-    in_res (Trans lbl sig inr outr :: xs) = MkRes lbl sig inr :: in_res xs
+    in_res (Stable lbl (sig, inr) :: xs) = MkRes lbl sig inr :: in_res xs
+    in_res (Trans lbl (sig, inr) outr :: xs) = MkRes lbl sig inr :: in_res xs
+    in_res (Add lbl (sig, inr) :: xs) = in_res xs
+    in_res (Remove lbl (sig, inr) :: xs) = MkRes lbl sig inr :: in_res xs
 
 public export
 SMTrans : (m : Type -> Type) -> (ty : Type) -> List (Action ty) -> Type

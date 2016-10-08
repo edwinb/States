@@ -44,8 +44,11 @@ data ConcOp : SM_sig ConcState where
 Conc : SM ConcState
 Conc = MkSM None ConcFinal ConcOp
 
+-- TODO: Change the types so that a server *must* run indefinitely and so
+-- we know we'll get a reply
+-- Also add loop to States so that we can have total programs that run forever
 fork : ((s : State Conc) -> 
-             SMTransNew m () ops [Stable s Conc (Waiting iface)]) -> 
+             SMTransNew m () ops [Stable s (Conc, Waiting iface)]) -> 
        SMNew m (Process iface) (Conc :: ops)
 fork {iface} server
      = do s <- new Conc
@@ -109,7 +112,7 @@ Client = MkSM Disconnected ClientFinal ClientOp
 request : {iface : request -> Type} ->
           (chan : State Client) -> (process : Process iface) ->
           (req : request) -> 
-          SMTrans m (Maybe (iface req)) [Stable chan Client Disconnected]
+          SMTrans m (Maybe (iface req)) [Stable chan (Client, Disconnected)]
 request chan proc req = do True <- on chan (Connect proc)
                              | False => pure Nothing
                            on chan (Send req)
@@ -145,7 +148,7 @@ ArithResponse (Negate k) = Int
 covering
 arithServer : ConsoleIO m => 
               (s : State Conc) ->
-              SMTrans m () [Stable s Conc (Waiting ArithResponse)]
+              SMTrans m () [Stable s (Conc, Waiting ArithResponse)]
 arithServer s = do putStrLn "Waiting for message"
                    msg <- on s (Listen 2)
                    case msg of
@@ -173,7 +176,6 @@ arithClient = do
                        | Nothing => do putStrLn "Server died"
                                        delete chan
                  putStrLn ("-" ++ num ++ " = " ++ show answer)
-
                  delete chan
 
 main : IO ()
