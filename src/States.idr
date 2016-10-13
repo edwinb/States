@@ -13,17 +13,41 @@ record SM stateType where
   init       : stateType
   final      : stateType -> Type
   operations : SM_sig stateType
+  creators   : SM_sig stateType 
+
+public export
+None : SM_sig stateType
+None = \_, _, _ => Void
 
 public export
 interface Execute (sm : SM state) (m : Type -> Type) where
-     resource : state -> Type
-     initialise : resource (init sm)
+    resource : state -> Type
+    initialise : resource (init sm)
 
-     covering
-     exec : (res : resource in_state) -> 
-            (ops : operations sm ty in_state out_fn) -> 
-            (k : (x : ty) -> resource (out_fn x) -> m a) -> m a
+    covering
+    exec : (res : resource in_state) -> 
+           (ops : operations sm ty in_state out_fn) -> 
+           (k : (x : ty) -> resource (out_fn x) -> m a) -> m a
 
+public export
+interface (exec : Execute sm m) => 
+          Create (sm : SM state) (m : Type -> Type) where
+    create : (res : resource {m} {sm} @{exec} in_state) ->
+             (ops : creators sm ty in_state out_fn) ->
+             (k : (x : ty) -> resource {m} {sm} @{exec} (out_fn x) -> m a) -> m a
+
+export
+interface NoCreate (sm : SM state) where
+    noCreators : creators sm ty in_state out_fn -> Void
+
+export
+NoCreate (MkSM {stateType} r f o None) where
+    noCreators x = x
+
+export
+%overlapping
+(NoCreate sm, Execute sm m) => Create sm m where
+    create res ops k = void (noCreators {sm} ops)
 
 public export
 data Resource : SM state -> Type where
@@ -140,6 +164,11 @@ data SMs : (m : Type -> Type) ->
           {auto prf : HasIFace in_state sm lbl ctxt} ->
           (op : operations sm t in_state out_fn) ->
           SMs m t ops ctxt (\res => updateCtxt ctxt prf (out_fn res))
+     NewFrom : (lbl : State sm) ->
+               {auto prf : HasIFace in_state sm lbl ctxt} ->
+               (op : creators sm t in_state out_fn) ->
+               SMs m (t, State sm)
+                     ops ctxt (\ res => MkRes (snd res) sm (out_fn (fst res)) :: ctxt)
      Call : {auto op_prf : SubList ops' ops} -> 
             SMs m t ops' ys ys' ->
             {auto ctxt_prf : SubCtxt ys xs} ->
@@ -264,7 +293,15 @@ on : (lbl : State sm) ->
      (op : operations sm t in_state out_fn) ->
      SMs m t ops ctxt (\res => updateCtxt ctxt prf (out_fn res))
 on = On
-
+    
+export
+newFrom : (lbl : State sm) ->
+       {auto prf : HasIFace in_state sm lbl ctxt} ->
+       (op : creators sm t in_state out_fn) ->
+       SMs m (t, State sm)
+             ops ctxt (\ res => MkRes (snd res) sm (out_fn (fst res)) :: ctxt) 
+newFrom = NewFrom
+     
 export
 call : {auto op_prf : SubList ops' ops} -> 
        SMs m t ops' ys ys' ->
@@ -331,14 +368,15 @@ namespace Env
   public export
   data Env : (m : Type -> Type) -> Context ts -> Type where
        Nil : Env m []
-       (::) : (exec : Execute sm m) => 
+       (::) : (exec : Execute sm m, Create sm m) => 
               resource @{exec} a -> Env m xs -> Env m (MkRes lbl sm a :: xs)
 
 namespace Execs
   public export
   data Execs : (m : Type -> Type) -> PList SM -> Type where
        Nil : Execs m []
-       (::) : Execute res m -> Execs m xs -> Execs m (res :: xs)
+       (::) : (Execute res m, Create res m) -> 
+              Execs m xs -> Execs m (res :: xs)
 
 dropVal : (prf : HasIFace st sm lbl ctxt) ->
           Env m ctxt -> Env m (drop ctxt prf)
@@ -359,8 +397,13 @@ dropEnv (x :: xs) (InCtxt idx rest)
 
 getExecute : (execs : Execs m rs) -> (pos : PElem sm rs) -> 
              Execute sm m
-getExecute (h :: hs) Here = h
-getExecute (h :: hs) (There p) = getExecute hs p
+getExecute ((h, _) :: hs) Here = h
+getExecute (_ :: hs) (There p) = getExecute hs p
+
+getCreate : (execs : Execs m rs) -> (pos : PElem sm rs) -> 
+            Create sm m
+getCreate ((_, h) :: hs) Here = h
+getCreate (_ :: hs) (There p) = getCreate hs p
 
 
 execsElem : PElem x xs -> Execs m xs -> Execs m [x]
@@ -396,6 +439,17 @@ rebuildEnv [] SubNil env = env
 rebuildEnv ((::) {a} res xs) (InCtxt {x = MkRes lbl sm val} idx rest) env 
       = replaceEnvAt idx (rebuildEnv xs rest env) res
 
+getIFaceExecute : HasIFace in_state sm lbl ctxt ->
+                  Env m ctxt -> Execute sm m
+getIFaceExecute Here (h :: hs) = %implementation
+getIFaceExecute (There p) (h :: hs) = getIFaceExecute p hs
+
+lookupEnv : (i : HasIFace in_state sm lbl ctxt) ->
+            (env : Env m ctxt) -> resource @{getIFaceExecute i env} in_state
+lookupEnv Here (h :: hs) = h
+lookupEnv (There p) (h :: hs) = lookupEnv p hs
+
+
 private
 execRes : Env m ctxt ->
           (prf : HasIFace in_state sm lbl ctxt) ->
@@ -419,12 +473,19 @@ runSMs env execs (Lift action) k
           k res env
 runSMs env execs (New {prf} sm) k 
      = let h = getExecute execs prf
+           c = getCreate execs prf
            res = initialise @{h} in
            k MkState (res :: env)
 runSMs env execs (Delete {prf} lbl) k 
      = k () (dropVal prf env)
 runSMs env execs (On {prf} lbl op) k 
      = execRes env prf op k
+runSMs env execs (NewFrom {prf} lbl op) k 
+     = believe_me () -- TODO! -- execRes env prf op k
+-- runSMs env execs (NewFrom {sm} {m} {ins} {prf} lbl) k
+--      = let oldr = lookupEnv prf env
+--            newr = split {sm} {m} {ins} oldr in
+--            k MkState (newr :: env)
 runSMs env execs (Call {op_prf} prog {ctxt_prf}) k 
      = let env' = dropEnv env ctxt_prf 
            execs' = dropExecs execs op_prf in
@@ -453,17 +514,21 @@ ExecList m [] where
   mkExecs = []
 
 export
-(Execute res m, ExecList m xs) => ExecList m (res :: xs) where
-  mkExecs = %implementation :: mkExecs
+(Execute res m, Create res m, ExecList m xs) => ExecList m (res :: xs) where
+  mkExecs = (%implementation, %implementation) :: mkExecs
 
 firstExec : ExecList m (res :: xs) -> Execute res m
 firstExec x with (mkExecs @{x})
-  firstExec x | (y :: ys) = y
+  firstExec x | ((y, _) :: ys) = y
+
+firstCreate : ExecList m (res :: xs) -> Create res m
+firstCreate x with (mkExecs @{x})
+  firstCreate x | ((_, c) :: ys) = c
 
 mkExecList : Execs m ops -> ExecList m ops
 mkExecList {ops = []} x = %implementation
-mkExecList {ops = (y :: ys)} (x :: xs) = let rec = mkExecList xs in
-                                             %implementation
+mkExecList {ops = (y :: ys)} ((h, c) :: xs) 
+       = let rec = mkExecList xs in %implementation
 
 tailExec : ExecList m (res :: xs) -> ExecList m xs
 tailExec es with (mkExecs @{es})
@@ -502,10 +567,10 @@ resEnv : {lower : ExecList m sms} ->
          (res : resources sms lower sts) -> Env m (mkRes lbls sts)
 resEnv {sms = []} {sts = ()} () res = []
 resEnv {lower} {sms = (x :: [])} {sts} lbls res 
-       = (::) @{firstExec lower} res []
+       = (::) @{firstExec lower} @{firstCreate lower} res []
 resEnv {lower = lower} {sts = (st, sts)} {sms = (x :: y :: ys)} 
        (lbl, lbls) (res, rest) 
-       = (::) @{firstExec lower} res (resEnv lbls rest)
+       = (::) @{firstExec lower} @{firstCreate lower} res (resEnv lbls rest)
 
 mkLabels : (sms : _) -> Labels sms
 mkLabels [] = ()

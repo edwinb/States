@@ -9,7 +9,7 @@ data TwoVarOp : SM_sig (Type, Type) where
      SetB : c -> TwoVarOp () (a, b) (const (a, c))
 
 TwoVar : SM (Type, Type)
-TwoVar = MkSM ((), ()) (\v => ()) TwoVarOp
+TwoVar = MkSM ((), ()) (\v => ()) TwoVarOp None
 
 Transform TwoVar [Var, Var] [] m where
     toState (a, b) = (a, b)
@@ -17,11 +17,9 @@ Transform TwoVar [Var, Var] [] m where
     finalOK (a, b) () = ((), ())
 
     transform (vara, varb) GetA 
-         = do val <- on vara Get
-              pure val
+         = on vara Get
     transform (vara, varb) GetB 
-         = do val <- on varb Get
-              pure val
+         = on varb Get
     transform (vara, varb) (SetA x) 
          = on vara (Put x)
     transform (vara, varb) (SetB x) 

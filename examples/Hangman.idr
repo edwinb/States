@@ -37,6 +37,7 @@ Hangman : SM HangmanState
 Hangman = MkSM Unstarted -- Initial state
                GameEnd -- Predicate for final states
                HangmanOp -- Operations on the state machine
+               None -- No creation
 
 {- Top level game, creates a new game then plays it -}
 hangman : ConsoleIO io => SMNew io () [Hangman]
@@ -86,7 +87,7 @@ data GameOp : SM_sig GameState where
 
 
 Game : SM GameState
-Game = MkSM NotRunning Finished GameOp
+Game = MkSM NotRunning Finished GameOp None
 
 
 {- Implementation of the game rules, starts with a number of guesses and

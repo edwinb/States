@@ -14,6 +14,7 @@ Var : SM Type
 Var = MkSM () -- Initial state
            (\x => ()) -- All states are valid final states
            VarOp -- Operations on the state machine
+           None -- No creators
 
 export
 Execute Var m where
