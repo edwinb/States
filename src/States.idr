@@ -28,26 +28,11 @@ interface Execute (sm : SM state) (m : Type -> Type) where
     exec : (res : resource in_state) -> 
            (ops : operations sm ty in_state out_fn) -> 
            (k : (x : ty) -> resource (out_fn x) -> m a) -> m a
-
-public export
-interface (exec : Execute sm m) => 
-          Create (sm : SM state) (m : Type -> Type) where
-    create : (res : resource {m} {sm} @{exec} in_state) ->
+    
+    covering
+    create : (res : resource in_state) ->
              (ops : creators sm ty in_state out_fn) ->
-             (k : (x : ty) -> resource {m} {sm} @{exec} (out_fn x) -> m a) -> m a
-
-export
-interface NoCreate (sm : SM state) where
-    noCreators : creators sm ty in_state out_fn -> Void
-
-export
-NoCreate (MkSM {stateType} r f o None) where
-    noCreators x = x
-
-export
-%overlapping
-(NoCreate sm, Execute sm m) => Create sm m where
-    create res ops k = void (noCreators {sm} ops)
+             (k : (x : ty) -> resource (out_fn x) -> m a) -> m a
 
 public export
 data Resource : SM state -> Type where
@@ -168,7 +153,7 @@ data SMs : (m : Type -> Type) ->
                {auto prf : HasIFace in_state sm lbl ctxt} ->
                (op : creators sm t in_state out_fn) ->
                SMs m (t, State sm)
-                     ops ctxt (\ res => MkRes (snd res) sm (out_fn (fst res)) :: ctxt)
+                     ops ctxt (\res => MkRes (snd res) sm (out_fn (fst res)) :: ctxt)
      Call : {auto op_prf : SubList ops' ops} -> 
             SMs m t ops' ys ys' ->
             {auto ctxt_prf : SubCtxt ys xs} ->
@@ -368,15 +353,14 @@ namespace Env
   public export
   data Env : (m : Type -> Type) -> Context ts -> Type where
        Nil : Env m []
-       (::) : (exec : Execute sm m, Create sm m) => 
+       (::) : (exec : Execute sm m) => 
               resource @{exec} a -> Env m xs -> Env m (MkRes lbl sm a :: xs)
 
 namespace Execs
   public export
   data Execs : (m : Type -> Type) -> PList SM -> Type where
        Nil : Execs m []
-       (::) : (Execute res m, Create res m) -> 
-              Execs m xs -> Execs m (res :: xs)
+       (::) : Execute res m -> Execs m xs -> Execs m (res :: xs)
 
 dropVal : (prf : HasIFace st sm lbl ctxt) ->
           Env m ctxt -> Env m (drop ctxt prf)
@@ -397,14 +381,8 @@ dropEnv (x :: xs) (InCtxt idx rest)
 
 getExecute : (execs : Execs m rs) -> (pos : PElem sm rs) -> 
              Execute sm m
-getExecute ((h, _) :: hs) Here = h
+getExecute (h :: hs) Here = h
 getExecute (_ :: hs) (There p) = getExecute hs p
-
-getCreate : (execs : Execs m rs) -> (pos : PElem sm rs) -> 
-            Create sm m
-getCreate ((_, h) :: hs) Here = h
-getCreate (_ :: hs) (There p) = getCreate hs p
-
 
 execsElem : PElem x xs -> Execs m xs -> Execs m [x]
 execsElem Here (x :: xs) = [x]
@@ -445,7 +423,8 @@ getIFaceExecute Here (h :: hs) = %implementation
 getIFaceExecute (There p) (h :: hs) = getIFaceExecute p hs
 
 lookupEnv : (i : HasIFace in_state sm lbl ctxt) ->
-            (env : Env m ctxt) -> resource @{getIFaceExecute i env} in_state
+            (env : Env m ctxt) -> 
+            (resource @{getIFaceExecute i env} in_state)
 lookupEnv Here (h :: hs) = h
 lookupEnv (There p) (h :: hs) = lookupEnv p hs
 
@@ -461,6 +440,17 @@ execRes {sm} {in_state} {out_fn} (val :: env) Here op k
 execRes {sm} {in_state} {out_fn} (val :: env) (There p) op k 
   = execRes {sm} {in_state} {out_fn} env p op (\v, env' => k v (val :: env'))
 
+-- private
+-- createRes : Env m ctxt ->
+--             (op : creators sm t in_state out_fn) ->
+--             ((x : (t, State sm)) -> 
+--                 Env m (MkRes (snd x) sm (out_fn (fst x)) :: ctxt) -> m b) ->
+--             m b
+-- execRes {sm} {in_state} {out_fn} (val :: env) Here op k 
+--   = exec {sm} {in_state} {out_fn} val op (\v, res => k v (res :: env))
+-- execRes {sm} {in_state} {out_fn} (val :: env) (There p) op k 
+--   = execRes {sm} {in_state} {out_fn} env p op (\v, env' => k v (val :: env'))
+
 export total
 runSMs : Env m inr -> Execs m ops ->
             SMs m a ops inr outfn ->
@@ -473,19 +463,18 @@ runSMs env execs (Lift action) k
           k res env
 runSMs env execs (New {prf} sm) k 
      = let h = getExecute execs prf
-           c = getCreate execs prf
            res = initialise @{h} in
            k MkState (res :: env)
 runSMs env execs (Delete {prf} lbl) k 
      = k () (dropVal prf env)
 runSMs env execs (On {prf} lbl op) k 
      = execRes env prf op k
-runSMs env execs (NewFrom {prf} lbl op) k 
-     = believe_me () -- TODO! -- execRes env prf op k
--- runSMs env execs (NewFrom {sm} {m} {ins} {prf} lbl) k
---      = let oldr = lookupEnv prf env
---            newr = split {sm} {m} {ins} oldr in
---            k MkState (newr :: env)
+runSMs env execs (NewFrom {sm} {in_state} {out_fn} {prf} lbl op) k 
+     = let envItem = lookupEnv prf env 
+           h = getIFaceExecute prf env in
+           create {sm} {out_fn} {in_state}
+                  envItem op (\val, res => k (val, MkState) 
+                                      (res :: env))
 runSMs env execs (Call {op_prf} prog {ctxt_prf}) k 
      = let env' = dropEnv env ctxt_prf 
            execs' = dropExecs execs op_prf in
@@ -514,20 +503,16 @@ ExecList m [] where
   mkExecs = []
 
 export
-(Execute res m, Create res m, ExecList m xs) => ExecList m (res :: xs) where
-  mkExecs = (%implementation, %implementation) :: mkExecs
+(Execute res m, ExecList m xs) => ExecList m (res :: xs) where
+  mkExecs = %implementation :: mkExecs
 
 firstExec : ExecList m (res :: xs) -> Execute res m
 firstExec x with (mkExecs @{x})
-  firstExec x | ((y, _) :: ys) = y
-
-firstCreate : ExecList m (res :: xs) -> Create res m
-firstCreate x with (mkExecs @{x})
-  firstCreate x | ((_, c) :: ys) = c
+  firstExec x | (y :: ys) = y
 
 mkExecList : Execs m ops -> ExecList m ops
 mkExecList {ops = []} x = %implementation
-mkExecList {ops = (y :: ys)} ((h, c) :: xs) 
+mkExecList {ops = (y :: ys)} (h :: xs) 
        = let rec = mkExecList xs in %implementation
 
 tailExec : ExecList m (res :: xs) -> ExecList m xs
@@ -567,10 +552,10 @@ resEnv : {lower : ExecList m sms} ->
          (res : resources sms lower sts) -> Env m (mkRes lbls sts)
 resEnv {sms = []} {sts = ()} () res = []
 resEnv {lower} {sms = (x :: [])} {sts} lbls res 
-       = (::) @{firstExec lower} @{firstCreate lower} res []
+       = (::) @{firstExec lower} res []
 resEnv {lower = lower} {sts = (st, sts)} {sms = (x :: y :: ys)} 
        (lbl, lbls) (res, rest) 
-       = (::) @{firstExec lower} @{firstCreate lower} res (resEnv lbls rest)
+       = (::) @{firstExec lower} res (resEnv lbls rest)
 
 mkLabels : (sms : _) -> Labels sms
 mkLabels [] = ()
@@ -584,24 +569,33 @@ envRes (y :: []) = believe_me y
 envRes {m} ((::) {m} y ((::) {sm} {m} {a} {lbl} z zs)) {sts = (st, sts)} 
      = (believe_me y, envRes {m} ((::) {sm} {m} {a} {lbl} z zs))
 
+public export
+interface NoCreate (sm : SM state) where
+    noCreators : creators sm ty in_state out_fn -> Void
+
+public export
+NoCreate (MkSM {stateType} r f o None) where
+    noCreators x = x
+
+
 using (sm : SM state, sms' : PList SM)
   export
   %overlapping -- It's not really, because of the superinterface, 
                -- but the check isn't good enough for this yet
   (trans : Transform sm sms' ops m, 
+   nocreate : NoCreate sm,
    ExecList m ops,
    lower : ExecList m sms') => Execute sm m where
-     resource @{trans} @{_} @{lower} {sms'} x 
+     resource @{trans} @{_} @{_} @{lower} {sms'} x 
          = resources sms' lower (toState @{trans} x)
-     initialise @{trans} @{_} @{lower} {sms'}
+     initialise @{trans} @{_} @{_} @{lower} {sms'}
            = rewrite sym (initOK @{trans}) in 
                 initAll sms' lower -- (initStates sms')
 
-     exec @{trans} @{_} @{lower} {out_fn} {sms'} res op k = 
+     exec @{trans} @{_} @{_} @{lower} {out_fn} {sms'} res op k = 
              let env = resEnv (mkLabels sms') res in
                  runSMs env mkExecs 
                     (transform {sm} {m} {tout_fn=out_fn} (mkLabels sms') op)
                     (\result, envk => k result (envRes envk))
---        runSMs [res] mkExecs (transform {sm} {m} {tout_fn=out_fn} MkState op) 
---        (\result, env => let env' = headEnv env in k result (believe_me env'))
 
+     create @{_} @{nocreate} res op k = void (noCreators @{nocreate} op)

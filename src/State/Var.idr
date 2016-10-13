@@ -24,3 +24,5 @@ Execute Var m where
     exec res Get     k = k res res
     exec res (Put x) k = k () x
 
+    create res op k = void op
+

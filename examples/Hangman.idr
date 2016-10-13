@@ -132,6 +132,7 @@ Show (GameData g) where
 Execute Game IO where
     resource = GameData
     initialise = MkNotRunning False
+    create res op k = void op
 
     exec (InProgress word _ missing) (Guess x) k = 
          case isElem x missing of
