@@ -74,7 +74,7 @@ ConsoleIO io => Transform RandServer [Net, Var] [Var] io where
                     | Left err => pure False
               Right ok <- on server (Bind Nothing 9442)
                     | Left err => pure False
-              Right ok <- on server Accept
+              Right ok <- on server Listen
                     | Left err => pure False
               on seed (Put 123456789)
               pure True

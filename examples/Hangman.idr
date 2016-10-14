@@ -132,7 +132,7 @@ Show (GameData g) where
 Execute Game IO where
     resource = GameData
     initialise = MkNotRunning False
-    create res op k = void op
+    create res op k = pass op
 
     exec (InProgress word _ missing) (Guess x) k = 
          case isElem x missing of
@@ -177,7 +177,7 @@ ConsoleIO m => Transform Hangman [Var] [Game] m where
                                True => pure True
                                False => pure False
 
-    createAs word op = void op
+    createAs word op = pass op
 
 {- And then run it... -}
 main : IO ()

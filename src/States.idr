@@ -15,10 +15,15 @@ record SM stateType where
   operations : SM_sig stateType
   creators   : SM_sig stateType 
 
+-- As a data type, helps with error_reverse and type class search, but
+-- really it's just Void
 public export
-%error_reverse
-None : SM_sig stateType
-None = \_, _, _ => Void
+data None : {stateType : Type} -> SM_sig stateType where
+     NoCmd : {a : stateType} -> Void -> None {stateType} () a (\res => a)
+
+export
+pass : None {stateType} ty ins outf -> a
+pass (NoCmd p) = void p
 
 public export
 interface Execute (sm : SM state) (m : Type -> Type) where
