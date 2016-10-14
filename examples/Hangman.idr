@@ -167,15 +167,17 @@ ConsoleIO m => Transform Hangman [Var] [Game] m where
     {- Implement 'Hangman' ops using 'Var' to store the word. 
        We're also allowed to create 'Game' state machines as required, as it
        says in the implementation header. -}
-    transform word (NewGame x) = on word (Put x)
-    transform word Play = do x <- on word Get
-                             game <- new Game
-                             on game (SetTarget (toUpper x))
-                             result <- call (play game)
-                             delete game
-                             case result of
-                                  True => pure True
-                                  False => pure False
+    execAs word (NewGame x) = on word (Put x)
+    execAs word Play = do x <- on word Get
+                          game <- new Game
+                          on game (SetTarget (toUpper x))
+                          result <- call (play game)
+                          delete game
+                          case result of
+                               True => pure True
+                               False => pure False
+
+    createAs word op = void op
 
 {- And then run it... -}
 main : IO ()

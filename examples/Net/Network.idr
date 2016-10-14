@@ -4,6 +4,8 @@ import States
 import Network.Socket
 import Interface.IO
 
+%access public export
+
 data Role = Client | Server
 
 data SocketState = Closed
@@ -52,6 +54,7 @@ data NetFinal : SocketState -> Type where
 Net : SM SocketState
 Net = MkSM Closed NetFinal NetOp NetCreate
 
+{-
 -- A simple server which reads an integer 'bound' and sends back a random
 -- number between 0 and bound
 rndServer : ConsoleIO io =>
@@ -86,7 +89,7 @@ startServer = do socket <- new Net
                        | Left err => do delete socket
                  call (rndServer socket 123456789)
                  delete socket
-
+                 -}
 
 -- How to run socket operations under 'IO'
 Execute Net IO where
@@ -137,7 +140,7 @@ Execute Net IO where
                                    | Left err => k (Left err) ()
                              k (Right addr) conn
 
-main : IO ()
-main = run startServer
+-- main : IO ()
+-- main = run startServer
 
 

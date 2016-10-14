@@ -16,6 +16,7 @@ record SM stateType where
   creators   : SM_sig stateType 
 
 public export
+%error_reverse
 None : SM_sig stateType
 None = \_, _, _ => Void
 
@@ -344,10 +345,18 @@ interface Transform (sm : SM state) (sms' : PList SM)
     finalOK : (x : state) -> (prf : final sm x) -> AllFinal sms' (toState x)
 
     -- Implement our operations in terms of the inner operations
-    transform : (lbls : Labels sms') -> -- State sm') ->
-                (op : operations sm t in_state tout_fn) ->
-                SMs m t ops (mkRes lbls (toState in_state))
-                   (\result => (mkRes lbls (toState (tout_fn result))))
+    execAs : (lbls : Labels sms') -> -- State sm') ->
+             (op : operations sm t in_state tout_fn) ->
+             SMs m t ops (mkRes lbls (toState in_state))
+                (\result => (mkRes lbls (toState (tout_fn result))))
+
+    createAs : (lbls : Labels sms') -> -- State sm') ->
+               (op : creators sm t in_state tout_fn) ->
+               SMs m (Labels sms', t) ops (mkRes lbls (toState in_state))
+                  (\result => 
+                    (mkRes (fst result) (toState (tout_fn (snd result))))
+                      ++
+                    (mkRes lbls (toState in_state)))
 
 namespace Env
   public export
@@ -569,33 +578,32 @@ envRes (y :: []) = believe_me y
 envRes {m} ((::) {m} y ((::) {sm} {m} {a} {lbl} z zs)) {sts = (st, sts)} 
      = (believe_me y, envRes {m} ((::) {sm} {m} {a} {lbl} z zs))
 
-public export
-interface NoCreate (sm : SM state) where
-    noCreators : creators sm ty in_state out_fn -> Void
-
-public export
-NoCreate (MkSM {stateType} r f o None) where
-    noCreators x = x
-
+take : {ctxt : Context sms} -> {ctxt' : Context sms'} ->
+       Env m (ctxt ++ ctxt') -> Env m ctxt
+take {ctxt = []} env = []
+take {ctxt = (_ :: hs)} (x :: env) = x :: take env
 
 using (sm : SM state, sms' : PList SM)
   export
   %overlapping -- It's not really, because of the superinterface, 
                -- but the check isn't good enough for this yet
   (trans : Transform sm sms' ops m, 
-   nocreate : NoCreate sm,
    ExecList m ops,
    lower : ExecList m sms') => Execute sm m where
-     resource @{trans} @{_} @{_} @{lower} {sms'} x 
+     resource @{trans} @{_} @{lower} {sms'} x 
          = resources sms' lower (toState @{trans} x)
-     initialise @{trans} @{_} @{_} @{lower} {sms'}
+     initialise @{trans} @{_} @{lower} {sms'}
            = rewrite sym (initOK @{trans}) in 
                 initAll sms' lower -- (initStates sms')
 
-     exec @{trans} @{_} @{_} @{lower} {out_fn} {sms'} res op k = 
+     exec @{trans} @{_} @{lower} {out_fn} {sms'} res op k = 
              let env = resEnv (mkLabels sms') res in
                  runSMs env mkExecs 
-                    (transform {sm} {m} {tout_fn=out_fn} (mkLabels sms') op)
+                    (execAs {sm} {m} {tout_fn=out_fn} (mkLabels sms') op)
                     (\result, envk => k result (envRes envk))
 
-     create @{_} @{nocreate} res op k = void (noCreators @{nocreate} op)
+     create @{trans} @{_} @{lower} {out_fn} {sms'} res op k = -- ?foo -- void (noCreators @{nocreate} op)
+             let env = resEnv (mkLabels sms') res in
+                 runSMs env mkExecs 
+                    (createAs {sm} {m} {tout_fn=out_fn} (mkLabels sms') op)
+                    (\result, envk => k (snd result) (envRes (take envk)))
