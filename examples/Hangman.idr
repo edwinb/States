@@ -94,7 +94,7 @@ Game = MkSM NotRunning Finished GameOp None
    letters to guess, can only end either in victory or defeat (NotRunning) -}
 play : ConsoleIO io =>
        (game : State Game) ->
-       SMTrans io Bool [Trans game (Game, Score (S g) l) (const NotRunning)]
+       SMTrans io Bool [Trans game (Score (S g) l) (const NotRunning)]
 play {g} {l = Z} game = do on game ClaimWin
                            pure True
 play {g} {l = S l} game 

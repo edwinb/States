@@ -43,8 +43,7 @@ RandServer = MkSM Idle RandFinal RandOp RandCreate
 -- A server loop keeps making connections to clients and running a session
 -- which reads an input, and sends a reply
 serverLoop : ConsoleIO io => 
-             (s : State RandServer) -> 
-             SMTrans io () [Stable s (RandServer, Ready)]
+             (s : State RandServer) -> SMTrans io () [Stable s Ready]
 serverLoop s = do num <- on s GetSeed
                   (True, session) <- newFrom s Accept
                          | (False, session) => do delete session

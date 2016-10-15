@@ -16,14 +16,16 @@ Transform TwoVar [Var, Var] [] m where
     initOK = Refl
     finalOK (a, b) () = ((), ())
 
-    transform (vara, varb) GetA 
+    execAs (vara, varb) GetA 
          = on vara Get
-    transform (vara, varb) GetB 
+    execAs (vara, varb) GetB 
          = on varb Get
-    transform (vara, varb) (SetA x) 
+    execAs (vara, varb) (SetA x) 
          = on vara (Put x)
-    transform (vara, varb) (SetB x) 
+    execAs (vara, varb) (SetB x) 
          = on varb (Put x)
+
+    createAs p op = pass op
 
 test : SMNew m (Int, Int) [TwoVar]
 test = do v <- new TwoVar
