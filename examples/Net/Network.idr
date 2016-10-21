@@ -2,7 +2,6 @@ module Network
 
 import States
 import Network.Socket
-import Interface.IO
 
 %access public export
 
@@ -10,10 +9,13 @@ data Role = Client | Server
 
 data SocketState = Closed
                  | Ready
-                 | Bound Role
-                 | Connected
+                 | Bound 
                  | Listening
                  | Open Role
+
+data CloseOK : SocketState -> Type where
+     CloseOpen : CloseOK (Open role)
+     CloseListening : CloseOK Listening
 
 -- Operations which change a socket state.
 -- Use 'Either' for all the return types, for consistency (I may add
@@ -25,18 +27,13 @@ data NetOp : SM_sig SocketState where
                     (either (const Closed) (const Ready))
      Bind : (addr : Maybe SocketAddress) -> (port : Port) ->
             NetOp (Either () ()) Ready 
-                  (either (const Closed)
-                          (const (case addr of
-                                       Nothing => Bound Server
-                                       Just _ => Bound Client)))
-     Listen : NetOp (Either () ()) (Bound Server)
-                    (\res => case res of
-                                  Left err => Closed
-                                  Right _ => Listening)
+                  (either (const Closed) (const Bound))
+     Listen : NetOp (Either () ()) Bound
+                  (either (const Closed) (const Listening))
      Connect : SocketAddress -> Port ->
-               NetOp (Either () ()) (Bound Client)
+               NetOp (Either () ()) Ready
                      (either (const Closed) (const (Open Client)))
-     Close : NetOp () st (\res => Closed) -- TODO: Only 'Open' and 'Listening'
+     Close : {auto prf : CloseOK st} -> NetOp () st (\res => Closed)
      Send : String -> NetOp (Either () ()) (Open x) 
                             (either (const Closed) (const (Open x)))
      Recv : NetOp (Either () String) (Open x) 
@@ -54,49 +51,12 @@ data NetFinal : SocketState -> Type where
 Net : SM SocketState
 Net = MkSM Closed NetFinal NetOp NetCreate
 
-{-
--- A simple server which reads an integer 'bound' and sends back a random
--- number between 0 and bound
-rndServer : ConsoleIO io =>
-            (socket : State Net) ->
-            Integer -> SMTrans io () [Trans socket (Net, Listening) (const Closed)]
-rndServer socket seed = do
-    (Right addr, conn) <- newFrom socket Accept
-          | (Left addr, conn) => do delete conn; on socket Close
-
-    Right msg <- on conn Recv
-          | Left err => do delete conn; on socket Close
-    printLn msg
-
-    let bound = the Integer (cast msg)
-    let seed' = (1664525 * seed + 1013904223) `prim__sremBigInt` (pow 2 32)
-
-    Right ok <- on conn (Send (show (seed' `mod` (bound + 1))))
-          | Left err => do delete conn; on socket Close
-
-    on conn Close
-    delete conn
-    rndServer socket seed'
-
-startServer : ConsoleIO io =>
-              SMNew io () [Net]
-startServer = do socket <- new Net
-                 Right ok <- on socket (Socket Stream)
-                       | Left err => do delete socket
-                 Right ok <- on socket (Bind Nothing 9442)
-                       | Left err => do delete socket
-                 Right ok <- on socket Listen 
-                       | Left err => do delete socket
-                 call (rndServer socket 123456789)
-                 delete socket
-                 -}
 
 -- How to run socket operations under 'IO'
 Execute Net IO where
     resource Closed = ()
     resource Ready = Socket
-    resource (Bound x) = Socket
-    resource Connected = Socket
+    resource Bound = Socket
     resource Listening = Socket
     resource (Open x) = Socket
 
@@ -121,12 +81,8 @@ Execute Net IO where
                                            then k (Left ()) ()
                                            else k (Right ()) res
     -- Only needs closing if it's actually open!
-    -- (TODO: Really need the proof on 'Close')
-    exec {in_state = Listening} res Close k = do close res
-                                                 k () ()
-    exec {in_state = (Open x)} res Close k = do close res
-                                                k () ()
-    exec res Close k = k () ()
+    exec res (Close {prf = CloseOpen}) k = do close res; k () ()
+    exec res (Close {prf = CloseListening}) k = do close res; k () ()
 
     exec res (Send msg) k = do Right _ <- send res msg
                                     | Left _ => k (Left ()) ()
@@ -139,8 +95,5 @@ Execute Net IO where
     create res Accept k = do Right (conn, addr) <- accept res
                                    | Left err => k (Left err) ()
                              k (Right addr) conn
-
--- main : IO ()
--- main = run startServer
 
 

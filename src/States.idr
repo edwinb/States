@@ -41,12 +41,12 @@ interface Execute (sm : SM state) (m : Type -> Type) where
              (k : (x : ty) -> resource (out_fn x) -> m a) -> m a
 
 public export
-data Resource : SM state -> Type where
-     MkRes : label -> (sm : SM state) -> state -> Resource sm
-
-public export
 data State : SM state -> Type where
      MkState : State sm
+
+public export
+data Resource : SM state -> Type where
+     MkRes : label -> (sm : SM state) -> state -> Resource sm
 
 infix 5 :::
 
@@ -76,25 +76,25 @@ appendNilRightNeutral [] = Refl
 appendNilRightNeutral (x :: xs) = rewrite appendNilRightNeutral xs in Refl
 
 public export
-data HasIFace : state -> (sm : SM state) -> State r -> Context ts -> Type where
-     Here : HasIFace st sm lbl (MkRes lbl sm st :: rs)
-     There : HasIFace st sm lbl rs -> HasIFace st sm lbl (r :: rs)
+data InState : (sm : SM state) -> State r -> state -> Context ts -> Type where
+     Here : InState sm lbl st (MkRes lbl sm st :: rs)
+     There : InState sm lbl st rs -> InState sm lbl st (r :: rs)
 
 public export
 updateCtxt : {st : state} ->
              (ctxt : Context ts) -> 
-             HasIFace st sm lbl ctxt -> state -> Context ts
+             InState sm lbl st ctxt -> state -> Context ts
 updateCtxt ((MkRes lbl st _) :: rs) Here val = ((MkRes lbl st val) :: rs)
 updateCtxt (r :: rs) (There x) ty = r :: updateCtxt rs x ty
 
 public export
 dropType : (ts : PList SM) -> (ctxt : Context ts) ->
-           HasIFace st sm lbl ctxt -> PList SM
+           InState sm lbl st ctxt -> PList SM
 dropType (sm :: ts) (MkRes lbl sm st :: xs) Here = ts
 dropType (t :: ts) (x :: xs) (There p) = t :: dropType ts xs p
 
 public export
-drop : (ctxt : Context ts) -> (prf : HasIFace st sm lbl ctxt) -> 
+drop : (ctxt : Context ts) -> (prf : InState sm lbl st ctxt) -> 
        Context (dropType ts ctxt prf)
 drop ((MkRes lbl sm st) :: rs) Here = rs
 drop (r :: rs) (There p) = r :: drop rs p
@@ -131,39 +131,39 @@ updateWith (MkRes lbl f a :: ys) xs (InCtxt {x = MkRes _ _ _} idx rest)
            updateAt idx a (updateWith ys xs rest)
 
 export
-data SMs : (m : Type -> Type) ->
+data SMProg : (m : Type -> Type) ->
            (ty : Type) ->
            PList SM ->
            Context ts -> (ty -> Context us) ->
            Type where
-     Pure : (result : val) -> SMs m val ops (out_fn result) out_fn
-     Bind : SMs m a ops st1 st2_fn ->
-            ((result : a) -> SMs m b ops (st2_fn result) st3_fn) ->
-            SMs m b ops st1 st3_fn
-     Lift : Monad m => m t -> SMs m t ops ctxt (const ctxt)
+     Pure : (result : val) -> SMProg m val ops (out_fn result) out_fn
+     Bind : SMProg m a ops st1 st2_fn ->
+            ((result : a) -> SMProg m b ops (st2_fn result) st3_fn) ->
+            SMProg m b ops st1 st3_fn
+     Lift : Monad m => m t -> SMProg m t ops ctxt (const ctxt)
 
      New : (sm : SM state) ->
            {auto prf : PElem sm ops} ->
-           SMs m (State sm) ops ctxt 
+           SMProg m (State sm) ops ctxt 
                     (\lbl => MkRes lbl sm (init sm) :: ctxt)
      Delete : (lbl : State iface) -> 
-              {auto prf : HasIFace st sm lbl ctxt} ->
+              {auto prf : InState sm lbl st ctxt} ->
               {auto finalok : final sm st} ->
-              SMs m () ops ctxt (const (drop ctxt prf))
+              SMProg m () ops ctxt (const (drop ctxt prf))
 
      On : (lbl : State sm) ->
-          {auto prf : HasIFace in_state sm lbl ctxt} ->
+          {auto prf : InState sm lbl in_state ctxt} ->
           (op : operations sm t in_state out_fn) ->
-          SMs m t ops ctxt (\res => updateCtxt ctxt prf (out_fn res))
+          SMProg m t ops ctxt (\res => updateCtxt ctxt prf (out_fn res))
      NewFrom : (lbl : State sm) ->
-               {auto prf : HasIFace in_state sm lbl ctxt} ->
+               {auto prf : InState sm lbl in_state ctxt} ->
                (op : creators sm t in_state out_fn) ->
-               SMs m (t, State sm)
+               SMProg m (t, State sm)
                      ops ctxt (\res => MkRes (snd res) sm (out_fn (fst res)) :: ctxt)
      Call : {auto op_prf : SubList ops' ops} -> 
-            SMs m t ops' ys ys' ->
+            SMProg m t ops' ys ys' ->
             {auto ctxt_prf : SubCtxt ys xs} ->
-            SMs m t ops xs (\result => updateWith (ys' result) xs ctxt_prf)
+            SMProg m t ops xs (\result => updateWith (ys' result) xs ctxt_prf)
 
 using (sm : SM st)
   public export
@@ -174,12 +174,12 @@ using (sm : SM st)
        Remove : State sm -> st -> Action ty
 
 public export
-SMTransNew : (m : Type -> Type) ->
-             (ty : Type) -> 
-             (ops : PList SM) ->
-             List (Action ty) -> Type
-SMTransNew m ty ops xs 
-     = SMs m ty ops (in_res xs) (\result : ty => out_res result xs)
+SMs : (m : Type -> Type) ->
+      (ty : Type) -> 
+      (ops : PList SM) ->
+      List (Action ty) -> Type
+SMs m ty ops xs 
+     = SMProg m ty ops (in_res xs) (\result : ty => out_res result xs)
   where
     ctxt : (input : Bool) -> List (Action ty) -> PList SM
     ctxt inp [] = []
@@ -208,16 +208,16 @@ SMTransNew m ty ops xs
 public export
 SMTrans : (m : Type -> Type) -> (ty : Type) -> List (Action ty) -> Type
 SMTrans m ty xs 
-     = SMTransNew m ty [] xs
+     = SMs m ty [] xs
 
 public export
 SMNew : (m : Type -> Type) -> (ty : Type) -> (ops : PList SM) -> Type
-SMNew m ty ops = SMTransNew m ty ops []
+SMNew m ty ops = SMs m ty ops []
 
 public export
 SMOp : (m : Type -> Type) -> Type -> Type
 SMOp m ty = {ts : _ } -> {ops : _} -> {ctxt : Context ts} -> 
-            SMs m ty ops ctxt (const ctxt)
+            SMProg m ty ops ctxt (const ctxt)
 
 -- Some useful hints for proof construction in polymorphic programs
 %hint
@@ -258,53 +258,53 @@ dropSuffix (InCtxt el sub) = InCtxt (inPrefix el sub) (dropSuffix sub)
 
 
 export
-pure : (x : val) -> SMs m val ops (out_fn x) out_fn
+pure : (x : val) -> SMProg m val ops (out_fn x) out_fn
 pure = Pure
 
 export
-lift : Monad m => m t -> SMs m t ops ctxt (const ctxt)
+lift : Monad m => m t -> SMProg m t ops ctxt (const ctxt)
 lift = Lift
 
 export
 new : (sm : SM state) ->
       {auto prf : PElem sm ops} ->
-      SMs m (State sm) ops ctxt 
+      SMProg m (State sm) ops ctxt 
               (\lbl => MkRes lbl sm (init sm) :: ctxt)
 new = New
 
 export
 delete : (lbl : State iface) -> 
-         {auto prf : HasIFace st sm lbl ctxt} ->
+         {auto prf : InState sm lbl st ctxt} ->
          {auto finalok : final sm st} ->
-         SMs m () ops ctxt (const (drop ctxt prf))
+         SMProg m () ops ctxt (const (drop ctxt prf))
 delete = Delete
 
 export
 on : (lbl : State sm) ->
-     {auto prf : HasIFace in_state sm lbl ctxt} ->
+     {auto prf : InState sm lbl in_state ctxt} ->
      (op : operations sm t in_state out_fn) ->
-     SMs m t ops ctxt (\res => updateCtxt ctxt prf (out_fn res))
+     SMProg m t ops ctxt (\res => updateCtxt ctxt prf (out_fn res))
 on = On
     
 export
 newFrom : (lbl : State sm) ->
-       {auto prf : HasIFace in_state sm lbl ctxt} ->
+       {auto prf : InState sm lbl in_state ctxt} ->
        (op : creators sm t in_state out_fn) ->
-       SMs m (t, State sm)
+       SMProg m (t, State sm)
              ops ctxt (\ res => MkRes (snd res) sm (out_fn (fst res)) :: ctxt) 
 newFrom = NewFrom
      
 export
 call : {auto op_prf : SubList ops' ops} -> 
-       SMs m t ops' ys ys' ->
+       SMProg m t ops' ys ys' ->
        {auto ctxt_prf : SubCtxt ys xs} ->
-       SMs m t ops xs (\result => updateWith (ys' result) xs ctxt_prf)
+       SMProg m t ops xs (\result => updateWith (ys' result) xs ctxt_prf)
 call = Call
 
 export
-(>>=) : SMs m a ops st1 st2_fn ->
-        ((x : a) -> SMs m b ops (st2_fn x) st3_fn) ->
-        SMs m b ops st1 st3_fn
+(>>=) : SMProg m a ops st1 st2_fn ->
+        ((x : a) -> SMProg m b ops (st2_fn x) st3_fn) ->
+        SMProg m b ops st1 st3_fn
 (>>=) = Bind
 
 public export
@@ -353,12 +353,12 @@ interface Transform (sm : SM state) (sms' : PList SM)
     -- Implement our operations in terms of the inner operations
     execAs : (lbls : Labels sms') -> -- State sm') ->
              (op : operations sm t in_state tout_fn) ->
-             SMs m t ops (mkRes lbls (toState in_state))
+             SMProg m t ops (mkRes lbls (toState in_state))
                 (\result => (mkRes lbls (toState (tout_fn result))))
 
     createAs : (lbls : Labels sms') -> -- State sm') ->
                (op : creators sm t in_state tout_fn) ->
-               SMs m (Labels sms', t) ops (mkRes lbls (toState in_state))
+               SMProg m (Labels sms', t) ops (mkRes lbls (toState in_state))
                   (\result => 
                     (mkRes (fst result) (toState (tout_fn (snd result))))
                       ++
@@ -377,7 +377,7 @@ namespace Execs
        Nil : Execs m []
        (::) : Execute res m -> Execs m xs -> Execs m (res :: xs)
 
-dropVal : (prf : HasIFace st sm lbl ctxt) ->
+dropVal : (prf : InState sm lbl st ctxt) ->
           Env m ctxt -> Env m (drop ctxt prf)
 dropVal Here (x :: xs) = xs
 dropVal (There p) (x :: xs) = x :: dropVal p xs
@@ -432,12 +432,12 @@ rebuildEnv [] SubNil env = env
 rebuildEnv ((::) {a} res xs) (InCtxt {x = MkRes lbl sm val} idx rest) env 
       = replaceEnvAt idx (rebuildEnv xs rest env) res
 
-getIFaceExecute : HasIFace in_state sm lbl ctxt ->
+getIFaceExecute : InState sm lbl in_state ctxt ->
                   Env m ctxt -> Execute sm m
 getIFaceExecute Here (h :: hs) = %implementation
 getIFaceExecute (There p) (h :: hs) = getIFaceExecute p hs
 
-lookupEnv : (i : HasIFace in_state sm lbl ctxt) ->
+lookupEnv : (i : InState sm lbl in_state ctxt) ->
             (env : Env m ctxt) -> 
             (resource @{getIFaceExecute i env} in_state)
 lookupEnv Here (h :: hs) = h
@@ -446,7 +446,7 @@ lookupEnv (There p) (h :: hs) = lookupEnv p hs
 
 private
 execRes : Env m ctxt ->
-          (prf : HasIFace in_state sm lbl ctxt) ->
+          (prf : InState sm lbl in_state ctxt) ->
           (op : operations sm t in_state out_fn) ->
           ((x : t) -> Env m (updateCtxt ctxt prf (out_fn x)) -> m b) ->
           m b
@@ -468,7 +468,7 @@ execRes {sm} {in_state} {out_fn} (val :: env) (There p) op k
 
 export total
 runSMs : Env m inr -> Execs m ops ->
-            SMs m a ops inr outfn ->
+            SMProg m a ops inr outfn ->
             ((x : a) -> Env m (outfn x) -> m b) -> m b
 runSMs env execs (Pure x) k = k x env
 runSMs env execs (Bind prog next) k 
@@ -497,21 +497,21 @@ runSMs env execs (Call {op_prf} prog {ctxt_prf}) k
                (\prog', envk => k prog' (rebuildEnv envk ctxt_prf env))
 
 
-export total
-run : Applicative m => 
-      {auto execs : Execs m ops} -> SMs m a ops [] (const []) -> 
-      m a
-run {execs} prog = runSMs [] execs prog (\res, env' => pure res)
-
-export total
-runPure : {auto execs : Execs Basics.id ops} -> 
-          SMs Basics.id a ops [] (const []) -> a
-runPure {execs} prog = runSMs [] execs prog (\res, env' => res)
-
 public export
 interface ExecList (m : Type -> Type) (ops : PList SM) where
   constructor MkExecList
   mkExecs : Execs m ops
+
+export total
+run : (Applicative m, ExecList m ops) => 
+      SMProg m a ops [] (const []) -> 
+      m a
+run prog = runSMs [] mkExecs prog (\res, env' => pure res)
+
+export total
+runPure : ExecList Basics.id ops =>
+          SMProg Basics.id a ops [] (const []) -> a
+runPure prog = runSMs [] mkExecs prog (\res, env' => res)
 
 export
 ExecList m [] where
