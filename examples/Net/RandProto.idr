@@ -101,7 +101,8 @@ ConsoleIO io => Transform RandServer [Net, Var] [Var] io where
                     | Left err => pure Nothing
               pure (Just (cast msg))
     execAs (server, seed) (SendResp resp) 
-         = do on server (Send (show resp))
+         = do Right ok <- on server (Send (show resp))
+                    | Left err => on seed (Put ())
               on server Close
               on seed (Put ())
     execAs (server, seed) GetSeed 
